@@ -13,6 +13,7 @@ feature request (GitHub issue, plain language)
   → GKE sandbox: stage the app as pods, run ALL tests (new + regression)
   → evidence posted to GitHub → pull request          /build-spec specs/<file>
   → CI re-checks independently → a person reviews and merges
+  → merge to main deploys automatically to UAT on Cloud Run, smoke-tested, rolled back on failure
 ```
 
 ## Never
@@ -73,6 +74,11 @@ mechanical rules; CI runs it on every PR.
   any order and in parallel, and never call real third-party services.
 - Playwright: `getByRole` / `getByLabel` / `getByTestId`; no CSS paths, no fixed sleeps.
 - The **whole** suite is the regression suite: every run executes all tests, old and new.
+- Tests that call `/test/...` endpoints are marked so UAT can skip them (test hooks are off
+  there): pytest `@pytest.mark.needs_test_hooks`; Playwright
+  `{ tag: ['@<AC-ID>', '@needs-test-hooks'] }` (criterion tag first).
+- UI tests that set up data through the API use `API` and `apiHeaders()` from
+  `tests/ui/helpers.ts`, never their own URL or headers, so they also work against UAT.
 
 ## 4. The app
 
@@ -83,6 +89,20 @@ mechanical rules; CI runs it on every PR.
   registered only `if TEST_HOOKS:` (env `ENABLE_TEST_HOOKS`, **off by default**), and are
   hidden from the API schema. Only `deploy/app/api.yaml` (sandboxes) turns them on.
 - `services/web`: FastAPI-rendered pages; browser calls go to `/api/*`, proxied to the API.
+  On Cloud Run the API is private; the web app authenticates with a Google identity token
+  when `API_AUDIENCE` is set. Don't call the API from the browser directly.
+
+## 4b. Environments
+
+| Environment | Where | Deployed by | Test hooks |
+|---|---|---|---|
+| Local | your machine | you / the agent | on (`ENABLE_TEST_HOOKS=true`) |
+| Dev sandbox | GKE `dev-<branch>` | `scripts/sandbox.sh` before the PR | on |
+| PR sandbox | GKE `pr-<N>` | CI on every PR | on |
+| **UAT** | **Cloud Run** `aaademo2-uat-web` / `-api` | **CI on every merge to `main`** (`deploy-uat.yml`) | **off** |
+
+Agents never deploy to UAT themselves; merging is a person's decision and the pipeline does
+the rest.
 
 ## 5. Delivery
 

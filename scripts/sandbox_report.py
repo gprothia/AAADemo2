@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-UI_TAG = re.compile(r"""test\(\s*(['"])(.+?)\1\s*,\s*\{\s*tag:\s*['"]@([A-Z]+-\d{3}-AC\d+)['"]""")
+UI_TAG = re.compile(r"""test\(\s*(['"])(.+?)\1\s*,\s*\{\s*tag:\s*\[?\s*['"]@([A-Z]+-\d{3}-AC\d+)['"]""")
 ICON = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}
 
 
