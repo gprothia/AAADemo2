@@ -13,6 +13,7 @@ permissions:
   contents: read
   id-token: write        # OIDC -> Workload Identity Federation (no JSON keys)
   pull-requests: write   # sticky comments
+  checks: write          # "Spec acceptance tests" check with every test listed
 
 env:
   PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -70,6 +71,7 @@ jobs:
           GOOGLE_GENAI_USE_VERTEXAI: "true"
           GOOGLE_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           GOOGLE_CLOUD_LOCATION: global
+          GEMINI_CLI_TRUST_WORKSPACE: "true"   # headless run in CI: trust the checked-out repo
         run: |
           # Headless Gemini CLI. Context is piped in, so no file or shell tools are needed.
           npx -y @google/gemini-cli@latest \
@@ -146,7 +148,8 @@ jobs:
         run: |
           export TEST_IMAGE="$AR/tests:$SHA"
           envsubst < deploy/sandbox/test-runner.yaml | kubectl apply -f -
-          kubectl -n "$NS" wait pod/test-runner --for=condition=Ready --timeout=10m || true
+          # Wait for the pod to start (not "Ready": the tests container exits when it's done).
+          kubectl -n "$NS" wait pod/test-runner --for=jsonpath='{.status.phase}'=Running --timeout=10m || true
           # Stream logs until the "tests" container exits.
           kubectl -n "$NS" logs -f pod/test-runner -c tests || true
           for _ in $(seq 1 60); do
@@ -161,7 +164,7 @@ jobs:
         run: |
           mkdir -p reports
           kubectl -n "$NS" cp test-runner:/reports ./reports -c results || echo "no reports"
-          kubectl -n "$NS" get pods,events --sort-by=.lastTimestamp > reports/k8s-state.txt || true
+          { kubectl -n "$NS" get pods -o wide; kubectl -n "$NS" get events --sort-by=.metadata.creationTimestamp; } > reports/k8s-state.txt || true
 
       - uses: actions/upload-artifact@v4
         if: always()

@@ -10,18 +10,52 @@ so the browser only ever talks to one host.
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import os
+import time
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 API_URL = os.environ.get("API_URL", "http://localhost:8080")
+# Set on Cloud Run (UAT), where the API is private: calls carry a Google identity token for
+# this audience (the API's URL). Unset locally and on GKE, where the API is reached directly.
+API_AUDIENCE = os.environ.get("API_AUDIENCE", "")
 USER = "demo"  # stand-in for a signed-in user
 
+
+class GoogleIdTokenAuth(httpx.Auth):
+    """Adds `Authorization: Bearer <identity token>` for a private Cloud Run service.
+
+    The token comes from the Cloud Run metadata server (the web service's own service account)
+    and is cached until shortly before it expires.
+    """
+
+    def __init__(self, audience: str):
+        self.audience = audience
+        self._token = ""
+        self._expires = 0.0
+
+    async def _get(self) -> str:
+        if time.time() > self._expires:
+            from google.auth.transport.requests import Request as GoogleRequest
+            from google.oauth2 import id_token
+
+            self._token = await asyncio.to_thread(id_token.fetch_id_token, GoogleRequest(), self.audience)
+            self._expires = time.time() + 45 * 60  # tokens live 60 minutes
+        return self._token
+
+    async def async_auth_flow(self, request):
+        request.headers["Authorization"] = f"Bearer {await self._get()}"
+        yield request
+
+
 app = FastAPI(title="Storefront")
-client = httpx.AsyncClient(base_url=API_URL, timeout=10)
+client = httpx.AsyncClient(
+    base_url=API_URL, timeout=10, auth=GoogleIdTokenAuth(API_AUDIENCE) if API_AUDIENCE else None
+)
 
 CSS = """
 body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;color:#1f2328}

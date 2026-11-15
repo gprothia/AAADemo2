@@ -104,7 +104,8 @@ test_run() {
   log "Running ALL tests (new + regression) inside $NS"
   kubectl -n "$NS" delete pod test-runner --ignore-not-found --wait=true
   TEST_IMAGE="$AR/tests:$tag" render < deploy/sandbox/test-runner.yaml | kubectl apply -f -
-  kubectl -n "$NS" wait pod/test-runner --for=condition=Ready --timeout=10m || true
+  # Wait for the pod to start (not "Ready": the tests container exits when it's done).
+  kubectl -n "$NS" wait pod/test-runner --for=jsonpath='{.status.phase}'=Running --timeout=10m || true
   kubectl -n "$NS" logs -f pod/test-runner -c tests || true
   for _ in $(seq 1 60); do
     code="$(kubectl -n "$NS" get pod test-runner \

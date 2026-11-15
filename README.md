@@ -54,6 +54,20 @@ Feature request (issue)  →  /write-spec #<n>  →  spec approved by a person
    **"GKE sandbox (pre-PR)"** commit status and a comment listing every test with its rule.
    The evidence is tied to the exact commit; a new push makes it stale until re-run.
 5. **Review and merge**: CI repeats the checks independently. Review the spec diff, then tests, then code.
+6. **UAT**: the merge triggers `.github/workflows/deploy-uat.yml`, which builds that commit's images,
+   deploys them to **Cloud Run**, runs the smoke tests against UAT and **rolls back automatically**
+   if they fail. The UAT link appears on the run's summary and under **Environments → uat**.
+
+## UAT on Cloud Run
+
+| | |
+|---|---|
+| Website | `aaademo2-uat-web`, public URL for testers |
+| API | `aaademo2-uat-api`, **private**: only the website and the pipeline may call it |
+| Data | demo data, in memory: resets when the API restarts or scales to zero |
+| Test hooks | off (tests needing them are skipped in the UAT smoke run) |
+| Rollback | automatic when smoke tests fail; manual: Cloud Run → service → Revisions → route 100% to a previous one |
+| Manual gate (optional) | Settings → Environments → `uat` → Required reviewers |
 
 Laptop prerequisites: `git`, `gh` (`gh auth login`), `gcloud` (`gcloud auth login`), `kubectl`
 (`gcloud components install kubectl gke-gcloud-auth-plugin`), Python 3.12, Node 22.
@@ -99,6 +113,21 @@ gcloud iam service-accounts add-iam-policy-binding $SA --project $PROJECT_ID \
   --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/$GH_REPO"
 ```
 
+For **UAT on Cloud Run**, add the runtime identities and deploy rights (once):
+
+```bash
+gcloud services enable run.googleapis.com --project $PROJECT_ID
+for name in uat-api uat-web; do
+  gcloud iam service-accounts create $name --project $PROJECT_ID
+  gcloud iam service-accounts add-iam-policy-binding $name@$PROJECT_ID.iam.gserviceaccount.com \
+    --project $PROJECT_ID --member="serviceAccount:$SA" --role=roles/iam.serviceAccountUser
+done
+gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:$SA" --role=roles/run.admin
+```
+
+If your organization blocks public Cloud Run services (`allUsers`), the website deploy fails at
+`--allow-unauthenticated`; put it behind Identity-Aware Proxy instead, or ask your admin.
+
 Then set these **repository variables** (Settings → Secrets and variables → Actions → Variables):
 
 | Variable | Value |
@@ -116,4 +145,4 @@ from the pre-PR run. Then, in **Settings → Branches**, protect `main`: require
 
 ## Known limits (demo)
 - No real login: the API trusts an `X-User` header.
-- Storage is in memory; nothing is deployed permanently after merge.
+- Storage is in memory, including in UAT: data resets on restart.

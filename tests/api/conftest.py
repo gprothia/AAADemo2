@@ -6,12 +6,19 @@ import pytest
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "ac(id): acceptance criterion this test verifies")
+    config.addinivalue_line(
+        "markers",
+        "needs_test_hooks: uses /test/... endpoints; skipped in UAT, where test hooks are off",
+    )
 
 
 @pytest.fixture(scope="session")
 def api():
     base = os.environ.get("API_BASE_URL", "http://localhost:8080")
-    with httpx.Client(base_url=base, timeout=15) as client:
+    # UAT on Cloud Run: the API is private, so CI passes an identity token.
+    token = os.environ.get("API_AUTH_TOKEN")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    with httpx.Client(base_url=base, timeout=15, headers=headers) as client:
         yield client
 
 
