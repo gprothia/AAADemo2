@@ -94,6 +94,18 @@ jobs:
           echo "web=$web" >> "$GITHUB_OUTPUT"
           echo "WEB_URL=$web" >> "$GITHUB_ENV"
 
+      - name: Wait until the website can reach the private API
+        run: |
+          # A newly granted permission (website -> API) can take a few minutes to take effect.
+          # Wait for it through the website's own API pass-through, instead of failing the tests.
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$WEB_URL/api/products" || echo 000)
+            echo "attempt $i: website -> API returned $code"
+            [ "$code" = 200 ] && exit 0
+            sleep 10
+          done
+          echo "::error::The website still can't reach the API after 5 minutes"; exit 1
+
       - name: Identity token for the private API
         id: token
         uses: google-github-actions/auth@v3
