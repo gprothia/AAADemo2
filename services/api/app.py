@@ -3,6 +3,7 @@
 Features already live:
   CAT-001  Browse the product catalog
   ORD-001  Create an order
+  ORD-002  My orders (list the caller's orders)
 
 Storage is in-memory on purpose: every sandbox starts clean and seeded.
 """
@@ -10,14 +11,17 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 
-from fastapi import FastAPI, Header, Request
+from fastapi import FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 MAX_LINE_ITEMS = 50
+PAGE_SIZE = 20
+ORDER_STATUSES = ("pending", "shipped", "cancelled")
 
 app = FastAPI(title="Orders API", version="1.0.0")
 
@@ -56,7 +60,7 @@ def _field_path(loc: tuple) -> str:
     """('body', 'items', 0, 'quantity') -> 'items[0].quantity'"""
     out = ""
     for part in loc:
-        if part == "body":
+        if part in ("body", "query"):
             continue
         if isinstance(part, int):
             out += f"[{part}]"
@@ -124,6 +128,7 @@ def create_order(body: OrderIn, x_user: str = Header(default="demo")):
         "id": uuid.uuid4().hex[:12],
         "owner": x_user,
         "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "items": lines,
         "total": float(total),
     }
@@ -137,3 +142,61 @@ def get_order(order_id: str, x_user: str = Header(default="demo")):
     if not order or order["owner"] != x_user:
         return error(404, "ORDER_NOT_FOUND", "Order not found")
     return order
+
+
+# ---------------------------------------------------------------- ORD-002
+
+
+def _summary(order: dict) -> dict:
+    names: list[str] = []
+    for line in order["items"]:
+        name = PRODUCTS.get(line["sku"], {}).get("name", line["sku"])
+        if name not in names:
+            names.append(name)
+    return {
+        "id": order["id"],
+        "created_at": order["created_at"],
+        "status": order["status"],
+        "total": order["total"],
+        "item_count": sum(line["quantity"] for line in order["items"]),
+        "item_names": names,
+    }
+
+
+@app.get("/orders")
+def list_orders(
+    page: int = Query(default=1, ge=1),
+    status: str | None = Query(default=None),
+    x_user: str = Header(default="demo"),
+):
+    if status is not None and status not in ORDER_STATUSES:
+        return error(422, "INVALID_STATUS", f"Status must be one of {', '.join(ORDER_STATUSES)}")
+    # ORDERS keeps insertion order, so reversing it gives newest first (ties keep creation order).
+    mine = [o for o in reversed(ORDERS.values()) if o["owner"] == x_user]
+    if status is not None:
+        mine = [o for o in mine if o["status"] == status]
+    start = (page - 1) * PAGE_SIZE
+    return {
+        "orders": [_summary(o) for o in mine[start : start + PAGE_SIZE]],
+        "page": page,
+        "page_size": PAGE_SIZE,
+        "total": len(mine),
+    }
+
+
+# ---------------------------------------------------------------- test hooks (sandboxes only)
+
+if TEST_HOOKS:
+
+    class StatusIn(BaseModel):
+        status: str
+
+    @app.post("/test/orders/{order_id}/status", include_in_schema=False)
+    def set_order_status(order_id: str, body: StatusIn):
+        order = ORDERS.get(order_id)
+        if not order:
+            return error(404, "ORDER_NOT_FOUND", "Order not found")
+        if body.status not in ORDER_STATUSES:
+            return error(422, "INVALID_STATUS", f"Status must be one of {', '.join(ORDER_STATUSES)}")
+        order["status"] = body.status
+        return order

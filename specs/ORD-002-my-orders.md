@@ -1,7 +1,7 @@
 ---
 id: ORD-002
 title: My orders page
-status: approved
+status: implemented
 owner: "@gprothia"
 issue: "#3"
 ui_routes: ["/orders"]

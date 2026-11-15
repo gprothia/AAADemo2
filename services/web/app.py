@@ -2,6 +2,7 @@
 
 Pages:
   /products         CAT-001  catalog table
+  /orders           ORD-002  my orders (list, paging, status filter)
   /orders/new       ORD-001  build and place an order
   /orders/{id}      ORD-001  order confirmation
 
@@ -77,7 +78,7 @@ def page(title: str, body: str) -> HTMLResponse:
     return HTMLResponse(
         f"""<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>
 <style>{CSS}</style></head><body>
-<nav><a href="/products">Products</a><a href="/orders/new">New order</a></nav>
+<nav><a href="/products">Products</a><a href="/orders/new">New order</a><a href="/orders">My orders</a></nav>
 {body}</body></html>"""
     )
 
@@ -112,6 +113,101 @@ async def products():
 <table aria-label="Products"><thead><tr><th>Name</th><th>SKU</th><th>Price</th></tr></thead>
 <tbody>{rows}</tbody></table>""",
     )
+
+
+# ---------------------------------------------------------------- ORD-002
+
+# The list is loaded in the browser from /api/orders (see the spec: the AC14 UI test stubs that
+# call, because the single user `demo` always has orders from other tests).
+MY_ORDERS_PAGE = """<h1>My orders</h1>
+<div class="row">
+  <label>Status
+    <select id="status">
+      <option value="">All</option>
+      <option value="pending">Pending</option>
+      <option value="shipped">Shipped</option>
+      <option value="cancelled">Cancelled</option>
+    </select>
+  </label>
+</div>
+<div id="list"></div>
+<p class="error" id="err" role="alert"></p>
+<script>
+const params = new URLSearchParams(location.search);
+const pageNo = Math.max(1, parseInt(params.get('page') || '1', 10) || 1);
+const status = params.get('status') || '';
+const select = document.getElementById('status');
+select.value = status;
+select.onchange = () => {
+  location.href = select.value ? '/orders?status=' + encodeURIComponent(select.value) : '/orders';
+};
+
+function link(page) {
+  const q = new URLSearchParams({page: String(page)});
+  if (status) q.set('status', status);
+  return '/orders?' + q.toString();
+}
+function el(tag, text, attrs) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v));
+  return e;
+}
+const fmtDate = (iso) => new Date(iso).toLocaleDateString('en-US',
+  {month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC'});
+const fmtMoney = (v) => '$' + v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+async function load() {
+  const q = new URLSearchParams({page: String(pageNo)});
+  if (status) q.set('status', status);
+  const res = await fetch('/api/orders?' + q.toString());
+  const body = await res.json();
+  const list = document.getElementById('list');
+  if (res.status !== 200) {
+    document.getElementById('err').textContent = body.message || 'Could not load your orders';
+    return;
+  }
+  if (body.total === 0) {
+    if (status) {
+      list.appendChild(el('p', 'No orders match this filter.'));
+    } else {
+      const p = el('p', "You haven't placed any orders yet. ");
+      p.appendChild(el('a', 'Browse products', {href: '/products'}));
+      list.appendChild(p);
+    }
+    return;
+  }
+  const table = el('table', undefined, {'aria-label': 'My orders'});
+  const head = el('tr');
+  ['Order', 'Date', 'Status', 'Items', 'Products', 'Total'].forEach((h) => head.appendChild(el('th', h)));
+  table.appendChild(el('thead')).appendChild(head);
+  const tbody = table.appendChild(el('tbody'));
+  body.orders.forEach((o) => {
+    const tr = el('tr');
+    const idCell = el('td');
+    idCell.appendChild(el('a', o.id, {href: '/orders/' + o.id}));
+    tr.appendChild(idCell);
+    tr.appendChild(el('td', fmtDate(o.created_at)));
+    tr.appendChild(el('td', cap(o.status), {'data-testid': 'order-status'}));
+    tr.appendChild(el('td', String(o.item_count)));
+    tr.appendChild(el('td', o.item_names.join(', ')));
+    tr.appendChild(el('td', fmtMoney(o.total)));
+    tbody.appendChild(tr);
+  });
+  list.appendChild(table);
+  const nav = el('div', undefined, {class: 'row'});
+  if (pageNo > 1) nav.appendChild(el('a', 'Previous', {href: link(pageNo - 1)}));
+  if (pageNo * body.page_size < body.total) nav.appendChild(el('a', 'Next', {href: link(pageNo + 1)}));
+  list.appendChild(nav);
+}
+load();
+</script>"""
+
+
+@app.get("/orders")
+def my_orders():
+    return page("My orders", MY_ORDERS_PAGE)
 
 
 # ---------------------------------------------------------------- ORD-001
@@ -174,7 +270,8 @@ async def show_order(order_id: str):
 <p>Order <code>{o['id']}</code> <span class="badge" data-testid="status-badge">{html.escape(o['status'].capitalize())}</span></p>
 <table aria-label="Order items"><thead><tr><th>SKU</th><th>Qty</th><th>Line total</th></tr></thead>
 <tbody>{rows}</tbody></table>
-<p>Total: <strong data-testid="order-total">{money(o['total'])}</strong></p>""",
+<p>Total: <strong data-testid="order-total">{money(o['total'])}</strong></p>
+<p><a href="/orders">View all my orders</a></p>""",
     )
 
 
@@ -186,6 +283,7 @@ async def proxy(path: str, request: Request):
     r = await client.request(
         request.method,
         f"/{path}",
+        params=request.query_params,
         content=await request.body(),
         headers={"Content-Type": request.headers.get("content-type", "application/json"), "X-User": USER},
     )
